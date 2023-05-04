@@ -54,14 +54,14 @@ gt_intensity = gt_intensity / torch.max(gt_intensity)
 # ---- forward and backward propagation -----
 A = generate_otf_torch(w, nx, ny, deltax, deltay, distance)
 holo = ifft2(torch.multiply(A, fft2(gt_intensity)))  # 此处应该是gt_intensity才对
-holo = torch.abs(holo)
+holo = holo.abs()**2
 holo = holo / torch.max(holo)
+y =  np.array(holo.unsqueeze(0))
 
 AT = generate_otf_torch(w, nx, ny, deltax, deltay, -distance)
 rec = ifft2(torch.multiply(AT, fft2(holo)))
 rec = torch.abs(rec)
 rec = norm_tensor(rec)
-rec = rec / torch.max(rec)
 
 fig, ax = plt.subplots(1, 2)
 ax[0].imshow(holo, cmap='gray')
@@ -103,7 +103,7 @@ def non_local_means(noisy_np_img, sigma, fast_mode=True):
     for c in range(n_channels):
         denoise_fast = denoise_nl_means(noisy_np_img[c, :, :], **patch_kw)
         denoised_img += [denoise_fast]
-    return np.array(denoised_img, dtype=np.float32)
+    return np.array(denoised_img)
 
 
 def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,            # H is the kernel, y is the blurred image
@@ -161,21 +161,21 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=gamma, step_size=step_size)
 
     # initialization
-    y = y.unsqueeze(0)
-    x = y.detach().clone()
+    y_torch = np_to_torch(y)
+    x = y.copy()
     avg = np.rint(y)
-    f_x, u = x.detach().clone(), torch.zeros_like(x)
+    f_x, u = x.copy(), np.zeros_like(x)
     img_queue = queue.Queue()
     # The denoiser thread that runs in parallel:
     denoiser_thread = Thread(target=lambda q, f, f_args: q.put(f(*f_args)),
-                             args=(img_queue, denoiser_function, [x.detach().clone(), sigma_f]))
+                             args=(img_queue, denoiser_function, [x.copy(), sigma_f]))
     denoiser_thread.start()
 
     list_psnr=[]
     list_stopping=[]
 
     if clean_img is not None:
-        psnr_y = psnr(clean_img, y)  # get the noisy image psnr
+        psnr_y = compare_PSNR(clean_img, y,on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)  # get the noisy image psnr
 
     # ADMM:
     for i in range(1, 1 + admm_iter):
@@ -186,12 +186,14 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
         optimizer.zero_grad()
         net_input = net_input_saved + (noise.normal_() * noise_factor)
         out = net(net_input)
+        out_np = torch_to_np(out)
 
-        pred_y = forward_propagation(out,A).abs()**2
+        pred_y = forward_propagation(out[0,0,:,:],A).abs()**2
         pred_y = pred_y/torch.max(pred_y)
         # loss:
-        loss_y = mse(pred_y,y)
-        loss_x = mse(out, x-u)
+        loss_y = mse(pred_y[None,None,:,:],y_torch)
+        loss_x = mse(out, np_to_torch(x - u))
+
         total_loss = loss_y + mu * loss_x
         total_loss.backward()
         optimizer.step()
@@ -201,37 +203,37 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
             denoiser_thread.join()
             f_x = img_queue.get()
             denoiser_thread = Thread(target=lambda q, f, f_args: q.put(f(*f_args)),
-                                     args=(img_queue, denoiser_function, [x.detach().clone(), sigma_f]))
+                                     args=(img_queue, denoiser_function, [x.copy(), sigma_f]))
             denoiser_thread.start()
 
         if i < swap_iter:
-            x = 1 / (beta + mu) * (beta * f_x + mu * (out + u))
+            x = 1 / (beta + mu) * (beta * f_x + mu * (out_np + u))
         else:
-            x = x - LR_x * (beta * (x - f_x) + mu * (x - out - u))
+            x = x - LR_x * (beta * (x - f_x) + mu * (x - out_np - u))
         np.clip(x, 0, 1, out=x)  # making sure that image is in bounds
 
         # step 3, update u
-        u = u + out - x
+        u = u + out_np - x
 
         # Averaging:
         avg = avg * .99 + out * .01
 
-        stopping = np.sqrt(np.sum(np.square(torch_to_np(forward_propagation(out,A))-y)))/ rho
+        stopping = np.sqrt(np.sum(np.square(np.array(forward_propagation(out[0,0,:,:],A))-y[0,:,:])))/ rho
         list_stopping.append(stopping)
 
         # show psnrs:
         if clean_img is not None:
-            psnr_net = psnr(clean_img, out)
-            psnr_x_u = psnr(clean_img, x - u)
-            psnr_avg = psnr(clean_img, avg)
-            psnr_noisy = psnr(clean_img,y)
+            psnr_net = compare_PSNR(clean_img, out_np, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
+            psnr_x_u = compare_PSNR(clean_img, x - u, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
+            psnr_avg = compare_PSNR(clean_img, avg, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
+            psnr_noisy = compare_PSNR(clean_img, y,on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
             list_psnr.append(psnr_avg)
             print('\r', algorithm_name, '%04d/%04d Loss %f' % (i, admm_iter, total_loss.item()),
                   'psnrs: noisy: %.2f net: %.2f x-u: %.2f avg: %.2f' % (psnr_noisy,psnr_net, psnr_x_u,psnr_avg),
                   'stopping: %.2f' %(stopping), end='')
             if i in plot_array:
                 tmp_dict = {'Clean': Data(clean_img),
-                            'Blurred': Data(y),
+                            'Blurred': Data(y,psnr_y),
                             'Net': Data(psnr, psnr_net),
                             'x-u': Data(x - u, psnr_x_u),
                             'avg': Data(avg, psnr_avg),
@@ -252,6 +254,6 @@ img_shape = [1,nx,ny]
 noise_lev = NOISE_SIGMA/255
 net, net_input = get_network_and_input(img_shape)
 plot_checkpoints = {1, 10, 100, 1000, 2000, 5000, 10000, 20000}
-clean,list_psnr,list_stopping = train_via_admm(net, net_input, non_local_means, A, holo.unsqueeze(0), tau, noise_lev,admm_iter=1000,
-                                                                               algorithm_name='DIP_RED', plot_array=plot_checkpoints,
-                                                                               clean_img=gt_intensity.unsqueeze(0))
+clean,list_psnr,list_stopping = train_via_admm(net, net_input, non_local_means, A,y, tau, noise_lev,admm_iter=1000,
+                                                                               algorithm_name='DIP_RED',
+                                                                               clean_img=np.array(gt_intensity.unsqueeze(0)))
