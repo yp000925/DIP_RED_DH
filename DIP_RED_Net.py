@@ -1,15 +1,17 @@
 import torch
-from threading import  Thread
+from threading import Thread
 import queue
 from utils.basic_utilis import psnr
 from utils.data import Data
 from utils.dh_utils import *
 from utils.basic_utilis import *
 
-def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype, device='cpu',           # H is the kernel, y is the blurred image
-                   clean_img=None, plot_array={}, algorithm_name="",             # clean_img for psnr to be shown
-                   gamma=.9, step_size=1000, save_path="",         # scheduler parameters and path to save params
-                   admm_iter=5000, LR=0.004,                                          # admm_iter is step_2_iter
+
+def train_via_admm(net, net_input, denoiser_function, A, y, dtype, device='cpu',
+                   # H is the kernel, y is the blurred image
+                   clean_img=None, plot_array={}, algorithm_name="",  # clean_img for psnr to be shown
+                   gamma=.9, step_size=1000, save_path="",  # scheduler parameters and path to save params
+                   admm_iter=5000, LR=0.004,  # admm_iter is step_2_iter
                    sigma_f=3, update_iter=10, method='fixed_point',  # method: 'fixed_point' or 'grad' or 'mixed'
                    beta=0.1, mu=0.1, LR_x=None, noise_factor=0.01):  # LR_x needed only if method!=fixed_point
     """ training the network using
@@ -45,7 +47,6 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
 
-
     # ---------- define x update method ----------
     if method == 'fixed_point':
         swap_iter = admm_iter + 1
@@ -62,8 +63,8 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=gamma, step_size=step_size)
 
     # initialization
-    y_torch = np_to_torch(y)
-    x = y.copy() # numpy array [ch, h, w]
+    y_torch = np_to_torch(y).to(device)
+    x = y.copy()  # numpy array [ch, h, w]
     avg = np.rint(y)
     f_x, u = x.copy(), np.zeros_like(x)
     img_queue = queue.Queue()
@@ -72,8 +73,8 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
                              args=(img_queue, denoiser_function, [x.copy(), sigma_f]))
     denoiser_thread.start()
 
-    list_psnr=[]
-    list_stopping=[]
+    list_psnr = []
+    list_stopping = []
 
     # ADMM:
     for i in range(1, 1 + admm_iter):
@@ -82,14 +83,13 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
         net_input = net_input_saved + (noise.normal_() * noise_factor)
 
         out = net(net_input.to(device))
-
         out_np = torch_to_np(out)
 
-        pred_y = forward_propagation(out[0,0,:,:],A).abs()**2
-        pred_y = pred_y/torch.max(pred_y)
+        pred_y = forward_propagation(out[0, 0, :, :], A).abs() ** 2
+        pred_y = pred_y / torch.max(pred_y)
         # loss:
-        loss_y = mse(pred_y[None,None,:,:],y_torch)
-        loss_x = mse(out, np_to_torch(x - u))
+        loss_y = mse(pred_y[None, None, :, :], y_torch)
+        loss_x = mse(out, np_to_torch(x - u).to(device))
 
         total_loss = loss_y + mu * loss_x
         total_loss.backward()
@@ -112,28 +112,23 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
         # step 3, update u
         u = u + out_np - x
 
-        # Averaging:
-        avg = avg * .99 + out_np * .01
-
-        stopping = loss_y.detach().numpy()/ rho
-        list_stopping.append(stopping)
+        # # Averaging:
+        # avg = avg * .99 + out_np * .01
 
         # show psnrs:
         if clean_img is not None:
-            psnr_net = compare_PSNR(clean_img, out_np, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
-            psnr_x_u = compare_PSNR(clean_img, x - u, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
-            psnr_avg = compare_PSNR(clean_img, avg, on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
-            psnr_noisy = compare_PSNR(clean_img, y,on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)
-            list_psnr.append(psnr_avg)
+            psnr_net = psnr( out_np,clean_img, is_tensor=False)
+            psnr_x_u = psnr( (x - u),clean_img, is_tensor=False)
+
+            list_psnr.append(psnr_net)
             print('\r', algorithm_name, '%04d/%04d Loss %f' % (i, admm_iter, total_loss.item()),
-                  'psnrs: noisy: %.2f net: %.2f x-u: %.2f avg: %.2f' % (psnr_noisy,psnr_net, psnr_x_u,psnr_avg),
-                  'stopping: %.2f' %(stopping), end='')
+                  'psnrs: net: %.2f x-u: %.2f' %(psnr_net, psnr_x_u),
+                  end='')
             if i in plot_array:
                 tmp_dict = {'Clean': Data(clean_img),
                             'Obsearvation': Data(y),
-                            'Net': Data(psnr, psnr_net),
+                            'Net': Data(out_np, psnr_net),
                             'x-u': Data(x - u, psnr_x_u),
-                            'avg': Data(avg, psnr_avg),
                             'u': Data((u - np.min(u)) / (np.max(u) - np.min(u)))
                             }
                 plot_dict(tmp_dict)
@@ -143,4 +138,4 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype
     # join the thread:
     if denoiser_thread.is_alive():
         denoiser_thread.join()  # joining the thread
-    return avg, list_psnr,list_stopping
+    return avg, list_psnr, list_stopping

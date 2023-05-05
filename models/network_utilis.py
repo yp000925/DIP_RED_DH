@@ -1,6 +1,8 @@
 from .skip import *
 from utils.basic_utilis import get_noise
 from skimage.restoration import denoise_nl_means
+
+
 def get_network_and_input(img_shape, input_depth=32, pad='reflection',
                           upsample_mode='bilinear', use_interpolate=True, align_corners=False,
                           act_fun='LeakyReLU', skip_n33d=128, skip_n33u=128, skip_n11=4,
@@ -31,7 +33,7 @@ def non_local_means(noisy_np_img, sigma, fast_mode=True):
                     fast_mode=fast_mode,   # If True, a fast version is used. If False, the original version is used.
                     patch_size=5,          # 5x5 patches (Size of patches used for denoising.)
                     patch_distance=6,      # 13x13 search area
-                    multichannel=False)
+                    channel_axis=None)
     denoised_img = []
     n_channels = noisy_np_img.shape[0]
     for c in range(n_channels):

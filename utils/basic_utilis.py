@@ -11,7 +11,7 @@ def psnr(x, ref, is_tensor=False):
         mse = torch.mean(torch.square(ref - x))
         psnr = torch.tensor(10.0) * torch.log10(1 / mse)
     else:
-        mse = np.mean(np.squre(ref - x))
+        mse = np.mean(np.square(ref - x))
         psnr = 10.0 * np.log10(1 / mse)
     return psnr
 
@@ -82,7 +82,7 @@ def plot_dict(data_dict):
     plt.figure(figsize=(scale, scale))
     for key, data in data_dict.items():
         i, ax = i + 1, plt.subplot(1, columns, i + 1)
-        plt.imshow(np_to_pil(data.img), cmap='gray')
+        plt.imshow(data.img[0,:,:], cmap='gray')
         ax.text(0.5, -0.15, key + (" psnr: %.2f" % (data.psnr) if data.psnr is not None else ""),
                 size=36, ha="center", transform=ax.transAxes)
     plt.show()

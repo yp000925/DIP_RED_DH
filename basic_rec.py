@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from threading import  Thread
 import queue
 
@@ -8,7 +9,7 @@ from models.network_utilis import get_network_and_input,non_local_means
 from utils.basic_utilis import psnr,estimate_variance
 from utils.data import Data
 from utils.dh_utils import *
-from skimage.restoration import denoise_nl_means
+
 import time
 from scipy.signal import convolve2d
 from torch.utils.tensorboard import SummaryWriter
@@ -52,7 +53,6 @@ gt_intensity = gt_intensity / torch.max(gt_intensity)
 # ---- forward and backward propagation -----
 A = generate_otf_torch(w, nx, ny, deltax, deltay, distance)
 AT = generate_otf_torch(w, nx, ny, deltax, deltay, -distance)
-
 holo = ifft2(torch.multiply(A, fft2(gt_intensity)))  # 此处应该是gt_intensity才对
 holo = holo.abs()**2
 holo = holo / torch.max(holo)
@@ -68,9 +68,14 @@ ax[1].set_title(('BP PSNR{:.2f}').format(psnr(rec, gt_intensity)))
 
 # ---- Define the network and data structure -----
 y  = np.array(holo.unsqueeze(0)) # numpy array with shape [ch,h,w]
+clean_img = np.array(gt_intensity.unsqueeze(0))
 print(y.shape)
 NOISE_SIGMA = estimate_variance(y[0,:,:])*255
 print(NOISE_SIGMA)
-
 net, net_input = get_network_and_input(y.shape)
-denoiser_function =  denoise_nl_means
+net = net.to(device)
+plot_array = {1, 10, 20, 30}
+clean,list_psnr,list_stopping = train_via_admm(net.to(device), net_input.to(device), non_local_means, A.to(device),y, dtype=dtype,
+                                               device = device,clean_img=clean_img,
+                                               admm_iter=30)
+

@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 from .common import *
 
+# class Net(nn.Module):
+#     def __init__(self,num_input_channels=2, num_output_channels=3,
+#                  num_channels_down=[16, 32, 64, 128, 128], num_channels_up=[16, 32, 64, 128, 128],
+#                  num_channels_skip=[4, 4, 4, 4, 4],
+#                  filter_size_down=3, filter_size_up=3, filter_skip_size=1,
+#                  need_sigmoid=True, need_bias=True,
+#                  upsample_mode='nearest', use_interpolate=True, align_corners=False,
+#                  pad='zero', downsample_mode='stride', act_fun='LeakyReLU',
+#                  need1x1_up=True):
+#         super().__init__()
+#         self.net = skip(num_input_channels, num_output_channels,
+#                    num_channels_down, num_channels_up,
+#                    num_channels_skip,
+#                    filter_size_down, filter_size_up, filter_skip_size,
+#                    need_sigmoid, need_bias,
+#                    upsample_mode, use_interpolate, align_corners,
+#                    pad, downsample_mode, act_fun,
+#                    need1x1_up)
+#
+#     def forward(self,x):
+#         return self.net(x)
 
 def skip(num_input_channels=2, num_output_channels=3,
          num_channels_down=[16, 32, 64, 128, 128], num_channels_up=[16, 32, 64, 128, 128],
