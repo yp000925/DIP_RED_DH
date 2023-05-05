@@ -1,112 +1,12 @@
-import os
-from threading import Thread  # needed since the denoiser is running in parallel
-import queue
-
-import numpy as np
 import torch
-import torch.optim
-from utils.utils_mine import get_network_and_input
-from utils.utils import *  # auxiliary functions
-from utils.utils_mine import psnr
-from utils.mine_blur_utils2 import *  # blur functions
-from utils.data import Data  # class that holds img, psnr, time
+from threading import  Thread
+import queue
+from utils.basic_utilis import psnr
+from utils.data import Data
 from utils.dh_utils import *
-from skimage.restoration import denoise_nl_means
-import time
-from scipy.signal import convolve2d
-from torch.utils.tensorboard import SummaryWriter
+from utils.basic_utilis import *
 
-GRAY_SCALE = True
-NOISE_SIGMA = 5
-if torch.cuda.is_available():
-    device = 'cuda'
-    dtype = torch.cuda.FloatTensor
-else:
-    device = 'cpu'
-    dtype = torch.FloatTensor
-
-
-# ---- define propagation kernel -----
-w = 632e-9
-deltax = 3.45e-6
-deltay = 3.45e-6
-distance = 0.02
-nx = 512
-ny = 512
-model_name = "AutoDHc/"
-timestr = time.strftime("sample3_%Y-%m-%d-%H_%M_%S/", time.localtime())
-out_dir = 'output/'
-if not os.path.exists(out_dir):
-    os.mkdir(out_dir)
-out_dir = out_dir + model_name
-if not os.path.exists(out_dir):
-    os.mkdir(out_dir)
-writer = SummaryWriter(out_dir + timestr)
-
-""" Load the GT intensity map and get the diffraction pattern"""
-img = Image.open('test_image.png').resize([512, 512]).convert('L')
-# img = Image.open('test_image2.jpg').resize([512, 512]).convert('L')
-# img = Image.open('USAF1951.jpg').resize([512, 512]).convert('L')
-gt_intensity = torch.from_numpy(np.array(img))
-gt_intensity = gt_intensity / torch.max(gt_intensity)
-
-
-# ---- forward and backward propagation -----
-A = generate_otf_torch(w, nx, ny, deltax, deltay, distance)
-holo = ifft2(torch.multiply(A, fft2(gt_intensity)))  # 此处应该是gt_intensity才对
-holo = holo.abs()**2
-holo = holo / torch.max(holo)
-y =  np.array(holo.unsqueeze(0))
-
-AT = generate_otf_torch(w, nx, ny, deltax, deltay, -distance)
-rec = ifft2(torch.multiply(AT, fft2(holo)))
-rec = torch.abs(rec)
-rec = norm_tensor(rec)
-
-fig, ax = plt.subplots(1, 2)
-ax[0].imshow(holo, cmap='gray')
-ax[1].imshow(rec, cmap='gray')
-ax[1].set_title(('BP PSNR{:.2f}').format(psnr(rec, gt_intensity)))
-# fig.show()
-
-
-
-
-# ---- estimate the noise  -----
-lap_kernel = np.array([[1,-2,1], [-2, 4, -2], [1,-2,1]])
-h=nx
-w=ny
-def estimate_variance(img):
-    out = convolve2d(img, lap_kernel, mode='valid')
-    out = np.sum(np.abs(out))
-    out = (out*np.sqrt(0.5*np.pi)/(6*(h-2)*(w-2)))
-    return out
-
-print(holo.shape)
-NOISE_SIGMA = estimate_variance(holo)*255
-print(NOISE_SIGMA)
-
-def non_local_means(noisy_np_img, sigma, fast_mode=True):
-    """ get a numpy noisy image
-        returns a denoised numpy image using Non-Local-Means
-    """
-    sigma = sigma / 255.
-    h = 0.6 * sigma if fast_mode else 0.8 * sigma
-    patch_kw = dict(h=h,                   # Cut-off distance, a higher h results in a smoother image
-                    sigma=sigma,           # sigma provided
-                    fast_mode=fast_mode,   # If True, a fast version is used. If False, the original version is used.
-                    patch_size=5,          # 5x5 patches (Size of patches used for denoising.)
-                    patch_distance=6,      # 13x13 search area
-                    multichannel=False)
-    denoised_img = []
-    n_channels = noisy_np_img.shape[0]
-    for c in range(n_channels):
-        denoise_fast = denoise_nl_means(noisy_np_img[c, :, :], **patch_kw)
-        denoised_img += [denoise_fast]
-    return np.array(denoised_img)
-
-
-def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,            # H is the kernel, y is the blurred image
+def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,dtype, device='cpu',           # H is the kernel, y is the blurred image
                    clean_img=None, plot_array={}, algorithm_name="",             # clean_img for psnr to be shown
                    gamma=.9, step_size=1000, save_path="",         # scheduler parameters and path to save params
                    admm_iter=5000, LR=0.004,                                          # admm_iter is step_2_iter
@@ -120,7 +20,7 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
         denoiser_function   - an external denoiser function, used as black box, this function
                               must get numpy noisy image, and return numpy denoised image
         H                   - the blur kernel
-        y                   - the blurred image [C,H,W]
+        y                   - the blurred image [C,H,W]=> numpy array
 
         # optional params #
         clean_img           - the original image if exist for psnr compare only, or None (default)
@@ -145,7 +45,8 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
 
-    # x update method:
+
+    # ---------- define x update method ----------
     if method == 'fixed_point':
         swap_iter = admm_iter + 1
         LR_x = None
@@ -162,11 +63,11 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
 
     # initialization
     y_torch = np_to_torch(y)
-    x = y.copy()
+    x = y.copy() # numpy array [ch, h, w]
     avg = np.rint(y)
     f_x, u = x.copy(), np.zeros_like(x)
     img_queue = queue.Queue()
-    # The denoiser thread that runs in parallel:
+    # The denoiser thread that runs in parallel in cpu:
     denoiser_thread = Thread(target=lambda q, f, f_args: q.put(f(*f_args)),
                              args=(img_queue, denoiser_function, [x.copy(), sigma_f]))
     denoiser_thread.start()
@@ -174,18 +75,14 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
     list_psnr=[]
     list_stopping=[]
 
-    if clean_img is not None:
-        psnr_y = compare_PSNR(clean_img, y,on_y=(not GRAY_SCALE), gray_scale=GRAY_SCALE)  # get the noisy image psnr
-
     # ADMM:
     for i in range(1, 1 + admm_iter):
-
-        rho = tau*noise_lev*np.sqrt(y.shape[0]*y.shape[1]*y.shape[2] - 1)
-
         # step 1, update network:
         optimizer.zero_grad()
         net_input = net_input_saved + (noise.normal_() * noise_factor)
-        out = net(net_input)
+
+        out = net(net_input.to(device))
+
         out_np = torch_to_np(out)
 
         pred_y = forward_propagation(out[0,0,:,:],A).abs()**2
@@ -233,7 +130,7 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
                   'stopping: %.2f' %(stopping), end='')
             if i in plot_array:
                 tmp_dict = {'Clean': Data(clean_img),
-                            'Blurred': Data(y,psnr_y),
+                            'Obsearvation': Data(y),
                             'Net': Data(psnr, psnr_net),
                             'x-u': Data(x - u, psnr_x_u),
                             'avg': Data(avg, psnr_avg),
@@ -247,13 +144,3 @@ def train_via_admm(net, net_input, denoiser_function, A, y, tau, noise_lev,     
     if denoiser_thread.is_alive():
         denoiser_thread.join()  # joining the thread
     return avg, list_psnr,list_stopping
-
-
-tau = 1
-img_shape = [1,nx,ny]
-noise_lev = NOISE_SIGMA/255
-net, net_input = get_network_and_input(img_shape)
-plot_checkpoints = {1, 10, 100, 1000, 2000, 5000, 10000, 20000}
-clean,list_psnr,list_stopping = train_via_admm(net, net_input, non_local_means, A,y, tau, noise_lev,admm_iter=1000,
-                                                                               algorithm_name='DIP_RED',
-                                                                               clean_img=np.array(gt_intensity.unsqueeze(0)))
