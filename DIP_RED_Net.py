@@ -8,12 +8,11 @@ from utils.basic_utilis import *
 
 
 def train_via_admm(net, net_input, denoiser_function, A, y, dtype, device='cpu',
-                   # H is the kernel, y is the blurred image
                    clean_img=None, plot_array={}, algorithm_name="",  # clean_img for psnr to be shown
                    gamma=.9, step_size=1000, save_path="",  # scheduler parameters and path to save params
                    admm_iter=5000, LR=0.004,  # admm_iter is step_2_iter
                    sigma_f=3, update_iter=10, method='fixed_point',  # method: 'fixed_point' or 'grad' or 'mixed'
-                   beta=0.1, mu=0.1, LR_x=None, noise_factor=0.01):  # LR_x needed only if method!=fixed_point
+                   beta=0.1, mu=0.1, LR_x=None, noise_factor=0.01,out_path =''):  # LR_x needed only if method!=fixed_point
     """ training the network using
         # mu=0.04
         ## Must Params ##
@@ -131,7 +130,9 @@ def train_via_admm(net, net_input, denoiser_function, A, y, dtype, device='cpu',
                             'x-u': Data(x - u, psnr_x_u),
                             'u': Data((u - np.min(u)) / (np.max(u) - np.min(u)))
                             }
-                plot_dict(tmp_dict)
+                # plot_dict(tmp_dict)
+                fname = out_path+'%d'%(i)+'_iter.png'
+                plot_and_save_dict(tmp_dict,save_path=fname)
         else:
             print('\r', algorithm_name, 'iteration %04d/%04d Loss %f' % (i, admm_iter, total_loss.item()), end='')
 

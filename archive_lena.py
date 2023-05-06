@@ -33,8 +33,8 @@ deltay = 3.45e-6
 distance = 0.02
 nx = 512
 ny = 512
-model_name = "AutoDHc/"
-timestr = time.strftime("sample3_%Y-%m-%d-%H_%M_%S/", time.localtime())
+model_name = "Baseline/"
+timestr = time.strftime("%Y-%m-%d-%H_%M_%S/", time.localtime())
 out_dir = 'output/'
 if not os.path.exists(out_dir):
     os.mkdir(out_dir)
@@ -42,7 +42,7 @@ out_dir = out_dir + model_name
 if not os.path.exists(out_dir):
     os.mkdir(out_dir)
 writer = SummaryWriter(out_dir + timestr)
-
+out_path= out_dir + timestr
 """ Load the GT intensity map and get the diffraction pattern"""
 img = Image.open('test_image.png').resize([512, 512]).convert('L')
 # img = Image.open('test_image2.jpg').resize([512, 512]).convert('L')
@@ -74,8 +74,9 @@ NOISE_SIGMA = estimate_variance(y[0,:,:])*255
 print(NOISE_SIGMA)
 net, net_input = get_network_and_input(y.shape)
 net = net.to(device)
-plot_array = {1, 10, 20, 30}
+plot_array = np.arange(0,3300,300)
+# plot_array = {1,500,1000,1500,2000,2500,3000}
 clean,list_psnr,list_stopping = train_via_admm(net.to(device), net_input.to(device), non_local_means, A.to(device),y, dtype=dtype,
-                                               device = device,clean_img=clean_img,
-                                               admm_iter=30)
+                                               device = device,clean_img=clean_img,plot_array=plot_array,
+                                               admm_iter=3000,out_path = out_path)
 

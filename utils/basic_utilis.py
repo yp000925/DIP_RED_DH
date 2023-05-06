@@ -86,3 +86,15 @@ def plot_dict(data_dict):
         ax.text(0.5, -0.15, key + (" psnr: %.2f" % (data.psnr) if data.psnr is not None else ""),
                 size=36, ha="center", transform=ax.transAxes)
     plt.show()
+
+def plot_and_save_dict(data_dict, save_path =''):
+    i, columns = 0, len(data_dict)
+    scale = columns * 10  # you can play with it
+    plt.figure(figsize=(scale, scale))
+    for key, data in data_dict.items():
+        i, ax = i + 1, plt.subplot(1, columns, i + 1)
+        plt.imshow(data.img[0,:,:], cmap='gray')
+        ax.text(0.5, -0.15, key + (" psnr: %.2f" % (data.psnr) if data.psnr is not None else ""),
+                size=36, ha="center", transform=ax.transAxes)
+    plt.savefig(save_path)
+    plt.show()
